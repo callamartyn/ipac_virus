@@ -1,0 +1,264 @@
+---
+title: "Rdrp_plots"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '~/chou_lab/alongshan/paper_repo/')
+
+```
+
+
+```{r}
+library('readr')
+library('ggplot2')
+library('tidyverse')
+library('treemapify')
+library('RColorBrewer')
+library('scales')
+library('gridExtra')
+library('cowplot')
+
+```
+
+
+
+```{r}
+rdrp_sum<-read_delim('./rdrp_sum.csv', delim=',')
+sample_sum<-read_delim('./sample_sum.csv',delim=',')
+
+```
+```{r}
+virus_cov_long<-read_delim('./contig_coverage.csv', delim=',')%>%
+  filter(contig_id %in% (rdrp_sum %>% filter(type=='virus')%>%pull(contig_id)))%>%
+  filter(mass >= 10 * control_mass)%>%
+  filter(mass >= 1e-5)
+```
+
+
+```{r}
+families<-rdrp_sum%>%
+  arrange(virus_name)%>%
+  pull(tree_family)%>%
+  factor()
+pal<- c("#6fed8f", "#b54164", "#86b5a1", "#8a5e6b","#eac328", "#a1def0", "#c5df72", "#605ec7", "#658114",  "#c2aff0", "#247672", "#bf3e05", "#e4bfab")
+
+mycolors<-pal
+names(mycolors) <- levels(families)
+custom_colors <- scale_fill_manual(name = "Family Names", values = mycolors)
+```
+
+```{r}
+vlevels<-c('Shoal Cavern Virus', 'Rocky Ridge Virus', 'Lobos Virus', 'Soberanes Virus', 'North Fork Virus', 'Doud Peak Virus', 'Notleys Landing Virus', 'Cabrillo Virus', 'Kasler Point Virus', 'Painters Point Virus', 'Calla Lily Valley Virus', 'Wildcat Canyon Virus', 'Portuguese Ridge Virus')
+
+m1<-rdrp_sum%>%
+  filter(type=='virus')%>%
+  mutate(virus_name=factor(virus_name, levels=rev(vlevels)))%>%
+  select(virus_name,tree_family,pident,n_prevalence)%>%
+  mutate(pident=replace_na(pident,0))%>%
+  ggplot(.,aes(y=virus_name, x=pident, fill=tree_family))+
+  geom_bar(stat='identity')+
+  scale_x_continuous(breaks=seq(0,100,10))+
+  custom_colors+
+  ylab('Virus Name')+
+  xlab('Percent AA Identity to Closest Hit')+
+  theme(legend.position="none")
+  # theme(legend.position="none",
+  #       axis.text.y=element_blank(),
+  #       axis.ticks.y=element_blank(), 
+  #       axis.title.y=element_blank())
+ggsave('../out/plots/Virus/rdrp_aa_bar.pdf',m1)
+m1
+```
+
+
+PCR results table
+```{r}
+col_order=c('pos_control', 'neg_control', 'dermacentor','Female_MG', 'Female_SG', 'Male_MG', 'Male_SG', 'wild_larvae', 'lab_larvae', 'lab_nymphs','lab_female', 'lab_male', 'M232_D2',  'M232_D4', 'M233_D2', 'M233_D4' )
+
+pcr<-read_csv('./virus_screening_long.csv')%>%
+  replace(is.na(.), 0)%>%
+  mutate(total=(rep1+rep2))%>%
+  select(name, virus_name, total)%>%
+  #spread(name, total)%>%
+  filter(!virus_name %in% c('Cabrillo Virus str 1', 'Painters Point Virus str 1', 'Yankee Point Virus'))%>%
+  mutate(virus_name=factor(str_replace(virus_name, ' str [12]', ''), levels=rev(vlevels)))%>%
+  filter(name %in% col_order)%>%
+  mutate(name=factor(name, levels=col_order))
+  #column_to_rownames(var='virus_name')
+
+
+m2<-pcr%>%
+  filter(!name %in% c('pos_control', 'neg_control'))%>%
+   ggplot(.,aes( x=name, y=virus_name, fill=factor(total)))+
+  geom_tile(color='darkgrey', size=.5)+
+  scale_fill_manual(values=c('white', 'skyblue', 'skyblue3'))+
+  ylab('Virus Name')+
+  xlab('')+ 
+  guides(fill=guide_legend(title='Positive PCR Reactions'))+
+  theme(axis.text.x = element_text(angle = 45,hjust=1),
+        axis.ticks.y=element_blank(),
+        legend.position="top")
+ggsave('../out/plots/Virus/virus_pcr_table.pdf', m2)
+```
+
+
+
+```{r}
+# plot_grid(m1,m2,align='h',rel_widths = c(.4,.6))
+grid.arrange(m1,m2,nrow=1)
+```
+
+
+```{r}
+grid.arrange(m1, m2, nrow=1)
+```
+
+```{r}
+no_cov_samples<-setdiff(sample_sum$sample_id, virus_cov_long$sample_id)
+missing_samples<-tibble(sample_id=no_cov_samples, n_viruses=0)
+
+sprev<-virus_cov_long%>%
+  group_by(sample_id)%>%
+  summarise(n_viruses=n())%>%
+  rbind(missing_samples)
+
+s1<-sprev%>%
+  ggplot(.,aes( x=n_viruses))+
+  geom_bar()+
+  geom_vline(xintercept = median(sprev$n_viruses),color='red')+
+  labs(title='Viruses Per Sample', x='Number Viruses Detected', y='Frequency')+
+  theme_linedraw()
+ggsave('../out/plots/Virus/sample_prev_hist.pdf')
+
+vprev<-virus_cov_long%>%
+  group_by(contig_id)%>%
+  summarise(n_samples=n())%>%
+  mutate(per_samples=n_samples/dim(sample_sum)[1])%>%
+  left_join(.,rdrp_sum%>%select(contig_id,virus_name), by='contig_id')
+
+s2<-vprev%>%
+  ggplot(.,aes(x=reorder(virus_name,-per_samples), y=per_samples))+
+  geom_bar(stat='identity')+
+  scale_y_continuous(breaks=seq(0,1,.1))+
+  labs(title='Viral Prevalence', x='Virus', y='Prevalence')+
+  theme_linedraw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=6))
+ 
+ggsave('../out/plots/Virus/virus_prev_bar.pdf', height = 3, width = 3)
+
+s3<-sprev%>%
+  left_join(sample_sum, by='sample_id')%>%
+  ggplot(.,aes(x=nonhost_reads,y=n_viruses))+
+  geom_point()+
+  scale_x_continuous(labels=seq(0,13,1),breaks=seq(0,1.3e7,1e6))+
+  scale_y_continuous(breaks=seq(0,7,1))+
+  labs(title='Viral Diversity by Library Size', x='Number Nonhost Reads (Millions)', y='Number Viruses Detected')+
+  theme_linedraw()
+ggsave('../out/plots/Virus/lib_size_virus.pdf')  
+
+grid.arrange(s1, s3, s2, nrow=2)
+```
+
+
+Virus-Like Sequences
+```{r}
+rdrp_md%>%
+  group_by(type, tree_family)%>%
+  summarise('number_sequences'=n())%>%
+  filter(type=='virus')%>%
+  ggplot(.,aes(x=type, y=number_sequences, fill=tree_family))+
+  geom_bar(stat='identity')+
+  ggtitle('Virus Taxonomy')+
+  xlab('Viral Family')+
+  ylab('number of unique clusters')
+# ggsave('./out/plots/viral_vls_tax_invert.pdf')
+```
+
+```{r}
+rdrp_md%>%
+  group_by(type, tree_family)%>%
+  summarise('number_sequences'=n())%>%
+  ggplot(.,aes(y=type, x=number_sequences, fill=tree_family))+
+  geom_bar(stat='identity')+
+  ggtitle('Virus and VLS Taxonomy')+
+  ylab('Viral Family')+
+  xlab('number of unique sequences')
+ggsave('./plots/viral_vls_tax_invert.pdf')
+```
+
+
+```{r}
+rdrp_md%>%
+  group_by(type, tree_family)%>%
+  summarise('number_sequences'=n())%>%
+  ggplot(.,aes(y=tree_family, x=number_sequences, fill=type))+
+  geom_bar(stat='identity')+
+  scale_fill_manual(values=c('pink','darkolivegreen3'))+
+  scale_x_continuous(breaks=seq(0,16,2))+
+  ggtitle('Virus and VLS Taxonomy')+
+  ylab('Viral Family')+
+  xlab('Number of Unique Sequences')
+ggsave('./plots/viral_vls_tax.pdf')
+```
+```{r}
+t_res<-read_delim('./PCR/tissue_and_lab_screening.csv', delim=',')
+t_res%>%
+  # mutate(prev=rowSums(.))
+  left_join(vp%>%select(virus_name,p))%>%
+  mutate(virus=str_split(virus_name,' ', simplify = TRUE)[,1])%>%
+  arrange(virus)%>%
+  fill(p, .direction='down')%>%
+  arrange(p,virus_name)%>%
+  column_to_rownames(var='virus_name')%>%
+  select(-p,-virus)%>%
+  mutate_all(as.numeric)
+ 
+```
+
+
+```{r}
+t_res<-read_delim('./PCR/tissue_and_lab_screening.csv', delim=',')%>%
+  left_join(vp%>%select(virus_name,p))%>%
+  mutate(virus=str_split(virus_name,' ', simplify = TRUE)[,1])%>%
+  arrange(virus)%>%
+  fill(p, .direction='down')%>%
+  arrange(-p,virus_name)%>%
+  column_to_rownames(var='virus_name')%>%
+  select(-p,-virus)%>%
+  mutate_all(as.numeric)
+  
+```
+```{r}
+t_res<-t_res%>%
+  rownames_to_column(var='virus_name')%>%
+  pivot_longer(cols=names(t_res),values_to='rep1')
+  write_csv(t_res, './PCR/virus_screening_long.csv')
+```
+
+
+
+
+
+```{r}
+vls_res<-read_delim('./PCR/vls_screening.csv', delim=',')%>%
+  left_join(rdrp_md%>%select(contig_id, length, cluster_85, type, tree_family))%>%
+  filter(type=='vls')%>%
+  select(where(~sum(!is.na(.x)) > 0))%>%
+  select(-type, -contig_id)%>%
+  column_to_rownames(var='cluster_85')
+vls_res%>%
+  select(-tree_family, -length)%>%
+  mutate_all(as.numeric)
+# breaks=c(0,.9)
+# color=c("white","skyblue")
+# pheatmap(vls_res,cluster_rows=FALSE,cluster_cols=FALSE,breaks=breaks,color=color,cellwidth=10, cellheight=10)
+# write_delim(vls_res,'./vls/vls_res.csv', delim=',')
+
+```
+
+
+
+
+

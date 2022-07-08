@@ -1,0 +1,466 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library('readr')
+library('ggplot2')
+library('tidyverse')
+library('treemapify')
+library('RColorBrewer')
+library('scales')
+library('UpSetR')
+library('ggExtra')
+```
+```{r setup}
+knitr::opts_knit$set(root.dir = '~/chou_lab/alongshan/out/kraken/')
+```
+```{r}
+k<-read_delim('./combined_table.csv', delim=',')%>%
+  mutate(dataset=case_when(str_detect(sample, 'TICK001') ~ 'Garrapatta', str_detect(sample,'TICK002') ~ 'China Camp'))%>%
+  mutate(type=case_when(str_detect(sample, 'water|Hela') ~ 'control', TRUE ~ 'exp'))%>%
+  group_by(sample)%>%
+  mutate(total=sum(no_direct_reads))%>%
+  mutate(scale=total/1e6)%>%
+  mutate(rpm=no_reads/scale)%>%
+  mutate(rpm_direct=no_direct_reads/scale)
+
+
+
+```
+```{r}
+control<-k%>%
+  filter(type=='control')%>%
+  group_by(name)%>%
+  summarise(control_rpm = max(rpm_direct))
+
+k<-k%>%
+  left_join(control, by='name')%>%
+  mutate(control_rpm=replace_na(control_rpm, 0))
+```
+
+
+
+View Dataset Wide treemap
+```{r}
+n<-500
+k_sum<-k%>%
+  filter(type=='control')%>%
+  filter(rank %in% c('U', 'C'))%>%
+  group_by(name)%>%
+  summarise(sum_reads = sum(no_reads))
+
+other<-k_sum%>%
+  filter(sum_reads<n)%>%
+  dplyr::select(sum_reads)%>%
+  sum()
+
+k_sum<-k_sum%>%
+  filter(sum_reads>=n)%>%
+  add_row(name='other_bacteria', sum_reads=other)
+
+k_sum%>%ggplot(., aes(area=sum_reads, fill=name, label=name))+
+  geom_treemap()+
+  ggtitle('Dataset Read Classification')
+# ggsave('~/chou_lab/alongshan/out/plots/kraken_treemap.pdf')
+```
+```{r}
+k%>%
+  left_join(x, by='sample')%>%
+  filter(type=='exp')%>%
+  filter(rank %in% c('U', 'D'))%>%
+  arrange(by=percent_classified)
+```
+
+
+```{r}
+x<- k%>%
+  filter(rank=='U')%>%
+  mutate(percent_classified=100-percent_reads)%>%
+  select(sample, percent_classified)
+k_sum<-k%>%
+  left_join(x, by='sample')%>%
+  filter(rank %in% c('U', 'D'))%>%
+  # filter(name %in% c('unclassified', 'root'))%>%
+  filter(type=='exp')
+
+k_sum%>%
+  group_by(sample)%>%
+  ggplot(., aes(x=reorder(sample,-percent_classified), y=percent_reads, fill=name))+
+  geom_bar(stat='identity')+
+  scale_fill_manual(values=c('lightsalmon', 'grey'))+
+  xlab('Sample')+
+  ylab('Percent Nonhost Reads')+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave('../plots/Overview/kraken_classified.pdf')
+```
+```{r}
+k_sum%>%
+  filter(rank=='D')%>%
+  pull(percent_reads)%>%
+  summary()
+```
+
+
+
+```{r}
+
+classified_k<- k%>%
+  filter(rank!='U')%>%
+  filter(type=='exp')%>%
+  group_by(sample)%>%
+  mutate(classified_sum=sum(no_direct_reads))%>%
+  mutate(classify_percent=no_reads/classified_sum)
+
+classified_k<-classified_k %>%
+  mutate(class=case_when(rank=='C' ~ name, str_detect(rank, 'R|P|D') ~ 'None'))%>%
+  fill(class, .direction='down')
+classified_k<-classified_k %>%
+  mutate(family=case_when(rank=='F' ~ name, str_detect(rank, 'R|P|D|C|O') ~ 'None'))%>%
+  fill(family, .direction='down')
+classified_k<-classified_k %>%
+  mutate(genus=case_when(rank=='G' ~ name, str_detect(rank, 'R|P|D|C|O|F') ~ 'None'))%>%
+  fill(genus, .direction='down')
+
+```
+```{r}
+classified_k%>%
+  ungroup()%>%
+  filter(rank=='C')%>%
+  filter(rpm>10*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  # filter(!name%in%c('Pseudomonas','Xanthomonas'))%>%
+  group_by(name)%>%
+  summarise(sum_rpm = sum(rpm))%>%
+  mutate(tax_percent=sum_rpm/sum(sum_rpm))%>%
+  ggplot(., aes(area=sum_rpm, fill=ifelse(tax_percent>.001, name, 'other'), 
+                                          label=ifelse(tax_percent > .001, name, 'other')))+
+  geom_treemap()
+
+
+# k_sum%>%ggplot(., aes(area=sum_reads, fill=name, label=name))+
+#   geom_treemap()+
+#   ggtitle('Dataset Read Classification')
+# ggsave('~/chou_lab/alongshan/out/plots/kraken_treemap.pdf')
+```
+
+
+
+
+
+
+```{r}
+pal<-c('#B4AFB7',hue_pal()(12))
+show_col(pal)
+pal<-c("#B4AFB7", '#BF544D',"#F76745", "#DE8C00", "#B79F00","#FFCC33", "#FDB863",  "#ACC742", "#00BA38",'#90D5B0',"#00BFC4", "#B1B8EA", '#6666CC','#C07EDA', "#D35B95","#9966CC", "#FF6699")
+show_col(pal)
+```
+
+
+```{r}
+write_csv(classified_k, '../out/kraken/classified_kraken.csv')
+```
+```{r}
+classified_k<-read_csv( './classified_kraken.csv')
+```
+
+Genus by Sample Bar Graph
+
+```{r}
+classified_k%>%
+  filter(rpm>100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  filter(rank=='C')%>%
+  group_by(sample)%>%
+  mutate(tax_reads=sum(no_reads))%>%
+  filter(tax_reads>=1000)%>%
+  mutate(tax_percent=no_reads/sum(no_reads))%>%
+  ggplot(.,aes(x=sample, y=tax_percent, fill=ifelse(tax_percent>.05, name, 'aaBacterial Classes < 5%')))+
+  geom_bar(stat='identity')+
+  scale_fill_manual(values=pal)+
+  labs(fill='Class')+
+  ylab('Percent of Classified Reads')+
+  xlab('Sample')+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=2),legend.text=element_text(size=8),legend.key.size = unit(1, 'cm'), #change legend key size
+        legend.key.height = unit(.4, 'cm'), #change legend key height
+        legend.key.width = unit(.4, 'cm'))
+
+ggsave('../plots/kraken_sample_bar.pdf')
+ 
+
+```
+```{r}
+df<-classified_k%>%
+  # filter(rpm>100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  # filter(rank=='C')%>%
+  filter(class=='Gammaproteobacteria')
+  # group_by(sample)%>%
+  # mutate(tax_reads=sum(no_reads))%>%
+  # filter(tax_reads>=1000)%>%
+  # mutate(tax_percent=no_reads/sum(no_reads))%>%
+  # arrange(-tax_percent)%>%
+  # slice(1:3)
+```
+
+
+
+
+
+```{r}
+plot_tax<-function(t, n, r){
+  classified_k%>%
+    filter(!!t == n)%>%
+    filter(rank==r)%>%
+    filter(rpm>pmax(10*control_rpm, 28))%>%
+    group_by(sample)%>%
+    mutate(tax_reads=sum(no_reads))%>%
+    mutate(tax_percent=no_reads/tax_reads)%>%
+    ggplot(.,aes(x=sample, y=tax_percent, fill=ifelse(tax_percent>.1, name, paste('other', n))))+
+      geom_bar(stat='identity')+
+      xlab('Sample')+
+      ylab(paste('Percent of ', n, ' Reads'))+
+      ggtitle(n)+
+      theme(axis.ticks.x=element_blank(),axis.text.x=element_blank(), legend.title=element_blank())
+
+}
+```
+
+
+
+```{r}
+
+c<-c('Gammaproteobacteria','Betaproteobacteria','Alphaproteobacteria', 'Mollicutes', 'Actinobacteria', 'Epsilonproteobacteria', 'Cytophagia', 'Spirochaetia', 'Flavobacteriia', 'Fusobacteriia')
+lapply(c, plot_tax, t=quo(class), r='F')
+
+```
+
+```{r}
+plot_tax(quo(family), 'Anaplasmataceae', 'G')
+plot_tax(quo(family), 'Coxiellaceae', 'S')
+  
+```
+
+
+species reads by genus
+```{r}
+x<-list(c('Anaplasma'),c('Borrelia', 'Borreliella'),c('Wolbachia'),c('Rickettsia'),c('Ehrlichia'))
+p<-lapply(x,plot_tax, rs=quo(genus), rp='S')
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria_species_breakdown.pdf', width = 12, height=16)
+grid.arrange(grobs=p, nrow=3)
+dev.off
+
+```
+
+
+
+
+
+```{r}
+g1<-c('Rickettsia', 'Spiroplasma', 'Candidatus Midichloria', 'Blattabacterium', 'Buchnera', 'Mycoplasma' ,'Candidatus Carsonella', 'Chryseobacterium')
+g2<-c('Anaplasma', 'Borrelia', 'Borreliella', 'Ehrlichia')
+n<-100
+pgs<-classified_k%>%
+  filter(rank=='G')%>%
+  filter((name %in% g1) | (name %in% g2))%>%
+  filter(rpm>(pmax(100*control_rpm)))%>%
+  filter(unique_minimizers>=n)%>%
+  dplyr::select(name, sample, rpm)
+# write_csv(pgs, '../intermediate/bacteria_rpm.csv')
+
+g1prev<-lapply(g1, function(x) pgs%>%filter(name==x)%>%pull(sample))
+names(g1prev)<-g1
+
+g2prev<-lapply(g2, function(x) pgs%>%filter(name==x)%>%pull(sample))
+names(g2prev)<-g2
+```
+```{r}
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria/endo_upset.pdf')
+upset(fromList(g1prev), order.by='freq', nsets=length(g1))
+dev.off()
+```
+
+
+```{r}
+
+
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria/endo_upset.pdf')
+upset(fromList(g1prev), order.by='freq', nsets=length(g1))
+dev.off()
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria/pathogen_upset.pdf')
+upset(fromList(g2prev), order.by='freq', nsets=length(g2))
+dev.off()
+n_samples<-classified_k%>%
+  filter(type=='exp')%>%
+  dplyr::select(sample)%>%
+  n_distinct()
+pgs%>%
+  group_by(name)%>%
+  summarise(n=n(), prev=n/n_samples)%>%
+  ggplot(.,aes(y=reorder(name,prev), x=prev))+
+  geom_bar(stat='identity')+
+  scale_x_continuous(breaks = seq(0, 1, by = .1), limits=c(0,1))+
+  xlab('Prevalence')+
+  ylab('Genus')
+# ggsave('~/chou_lab/alongshan/out/plots/bacteria_prevalence.pdf')
+
+pgs%>%
+  group_by(name)%>%
+  summarise(n=n(), prev=n/n_samples)
+```
+```{r}
+# gprev[c('Rickettsia', 'Spiroplasma', 'Candidatus Midichloria')]
+pdf(file='~/chou_lab/alongshan/out/plots/endo_upset.pdf')
+upset(fromList(gprev[c('Rickettsia', 'Spiroplasma', 'Candidatus Midichloria')]), order.by='freq')
+dev.off()
+```
+
+
+
+
+
+Read Distribution for Anaplasma and Borrelia
+```{r}
+classified_k%>%
+  filter(name == 'Anaplasma')%>%
+  ggplot(.,aes(x=rpm))+
+  geom_histogram(binwidth=10)+
+  xlab('Number Anaplasma Reads')+
+  ggtitle('Anaplasma RPM')
+# ggsave('~/chou_lab/alongshan/out/plots/anaplasma_read_hist.pdf')
+classified_k%>%
+  filter(name == 'Borrelia')%>%
+  ggplot(.,aes(x=rpm))+
+  geom_histogram(binwidth=10)+
+  xlab('Borrelia RPM')+
+  ggtitle('Number Borrelia Reads Per Sample')
+# ggsave('~/chou_lab/alongshan/out/plots/borrelia_read_hist.pdf')
+```
+
+
+Looking at most prevalent genera and most prevalent species
+```{r}
+genera<-classified_k%>%
+  filter(rpm>=100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  filter(rank=='G')
+classes<-classified_k%>%
+  filter(rpm>=100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  filter(rank=='C')
+```
+```{r}
+sample_sum<-classified_k%>%
+  filter(rpm>=100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  group_by(dataset,sample,rank)%>%
+  summarize(ntax=n(),libsize=2*max(total))
+nsamples=length(unique(classified_k$sample))
+```
+
+
+
+```{r} 
+
+p1<-sample_sum%>%
+  filter(rank=='G')%>%
+  ggplot(.,aes(x=libsize, y=ntax, color=dataset))+
+  geom_point()+
+  scale_x_continuous(breaks=seq(0, 12e6, by = 1e6),labels=seq(0, 12, by = 1))+
+  geom_hline(yintercept = median((sample_sum%>%filter(rank=='G')%>%pull(ntax))),color='red')+
+  scale_color_manual(values=c('salmon2', 'mediumaquamarine'))+
+  # theme_linedraw()+
+  theme(legend.position = c(.8, .8))+
+  labs(x='Library Size (million reads)', y='Number Genera')
+
+p<-ggExtra::ggMarginal(p=p1,type = "histogram")
+p1
+```
+```{r}
+p2<-sample_sum%>%
+  filter(rank=='C')%>%
+  ggplot(.,aes(x=libsize, y=ntax))+
+  geom_point()+
+  scale_x_continuous(breaks=seq(0, 12e6, by = 1e6))+
+  geom_hline(yintercept = median((sample_sum%>%filter(rank=='C')%>%pull(ntax))),color='red')+
+  # theme_linedraw()+
+  theme(legend.position = c(0, 1))+
+  labs(x='Library Size (million reads)', y='Number Classes')
+
+p2<-ggExtra::ggMarginal(p=p2,type = "histogram")
+
+```
+```{r}
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria/no_genera.pdf')
+p
+dev.off
+```
+```{r}
+pdf(file='~/chou_lab/alongshan/out/plots/bacteria/no_classes.pdf')
+p2
+dev.off
+```
+```{r}
+df<-sample_sum%>%
+  filter(rank=='G')
+lm(ntax~libsize, data=df)
+```
+
+```{r}
+genera%>%
+  ggplot(.,aes(x=rpm))+
+  geom_histogram(binwidth=10)+
+  xlim(0,1000)
+```
+
+```{r}
+
+genera%>%
+  filter(name=='Wolbachia')
+```
+```{r}
+p1
+```
+
+
+How does library size affect detection?
+```{r}
+plot_rpm<-function(n){
+  df<-classified_k%>%
+  filter(type=='exp')%>%
+  filter(name==n)
+  p1<-df%>%
+  ggplot(.,aes(x=total, y=rpm))+
+  geom_point()+
+  geom_hline(yintercept = max(df$control_rpm),color='red')
+  p2<-df%>%
+  ggplot(.,aes(x=total, y=unique_minimizers))+
+  geom_point()+
+  geom_hline(yintercept = 100,color='red')
+  grid.arrange(grobs=list(p1,p2), nrow=1,top=n)
+  # return(list(p1,p2))
+}
+
+```
+
+
+
+```{r}
+taxList<-prev%>%
+  mutate(p=(rowSums(prev)))%>%
+  select(p)%>%
+  rownames_to_column(var='tax')%>%
+  arrange(desc(p))%>%
+  pull(tax)
+```
+
+
+```{r}
+high<-c('Clostridium', 'Spiroplasma', 'Mycoplasma', 'Candidatus Midichloria', 'Campylobacter', 'Blattabacterium', 'Buchnera', 'Helicobacter')
+p<-lapply(high,plot_rpm)
+pdf(file='./cooccurence/high_prev_cutoff.pdf', width = 12, height=30)
+grid.arrange(grobs=p, nrow=length(high))
+dev.off
+```

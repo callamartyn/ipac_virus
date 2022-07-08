@@ -1,0 +1,316 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+str
+```
+
+```{r}
+
+library(readr)
+# library(GGally)
+# library(network)
+# library(sna)
+library(ggplot2)
+library(tidyverse)
+library(CooccurrenceAffinity)
+# library(tidygraph)
+# library(ggraph)
+library(igraph)
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '~/chou_lab/alongshan/out/')
+
+```
+```{r}
+kraken<-read_csv('./kraken/classified_kraken.csv')%>%
+  filter(rank=='G')
+```
+```{r}
+viral_p<-read_csv('./intermediate/rdrp_cov.csv')%>%
+  # dplyr::rename(name=virus_name)%>%
+  column_to_rownames(var='virus_name')
+  
+```
+```{r}
+
+bac_p<-kraken%>%
+  filter(total>=500000)%>%
+  filter(rpm >=100*control_rpm)%>%
+  filter(unique_minimizers >=100)%>%
+  filter(type=='exp')%>%
+  select(sample, name, rpm)%>%
+  spread(sample, rpm, fill=0)%>%
+  column_to_rownames(var='name')
+bac_p[bac_p>0]=1
+```
+```{r}
+colnames(bac_p)
+```
+
+```{r}
+viral_p[viral_p>0]=1
+viral_p[colnames(bac_p)]
+```
+```{r}
+p<-bac_p%>%rbind(viral_p[colnames(bac_p)])
+```
+
+
+
+```{r}
+samples<-kraken%>%
+  filter(total>=500000)%>%
+  pull(sample)%>%
+  unique()
+
+```
+
+
+
+
+```{r message=FALSE}
+myout2 <- affinity(data = p, row.or.col = "row", squarematrix = c("all"))
+# plotgg(data = myout, variable = "alpha_mle", legendlimit = "datarange")
+
+alpha2<-myout2$alpha_mle%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='alpha', -tax1)%>%
+  drop_na(alpha)
+pval2<-myout2$p_value%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='pval', -tax1)%>%
+  drop_na(pval)%>%
+  mutate(pval=as.numeric(pval))
+nobs2<-myout2$cooccur.obs%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='n_occur', -tax1)%>%
+  drop_na(n_occur)
+cca2<-alpha2%>%
+  left_join(pval2, by=c('tax1', 'tax2'))%>%
+  left_join(nobs2, by=c('tax1', 'tax2'))
+```
+
+
+
+
+```{r}
+cca%>%
+  ggplot(.,aes(x=alpha, y=-log10(pval)))+
+  geom_point()
+```
+
+
+```{r}
+# cca<-cca%>%
+#   filter(pval<=.005)
+
+write_csv(cca,'./cooccurence/combined_dist_alpha.csv')
+```
+
+
+
+```{r}
+
+edges<-cca%>%
+  filter(pval<=.05)%>%
+  mutate(color=ifelse(alpha<0, 'darkred', 'darkblue'))#%>%
+  # filter(n_occur>1)%>%
+  # filter(abs(alpha)>=5)
+nodes<-as.data.frame(rowSums(p))%>%
+  dplyr::rename(nprev='rowSums(p)')%>%
+  mutate(prevalence=nprev/max(nprev))%>%
+  rownames_to_column(var='tax')%>%
+  mutate(type=ifelse(str_detect(tax, 'irus'), 'virus', 'bacteria'))%>%
+  filter((tax %in% edges$tax1) |(tax %in% edges$tax2))%>%
+  mutate(color=ifelse(type=='bacteria', 'skyblue', 'yellow'))
+g<-igraph::graph_from_data_frame(d=edges,vertices = nodes,directed=FALSE)
+
+E(g)$weight<-E(g)$alpha
+
+V(g)$size=V(g)$prevalence*20+5
+
+# g<-layout_nicely(g)
+# c_scale <- colorRampPalette(c('red','white','blue'))
+# e_color <- c_scale(100)
+# sf <- max(abs(x$alpha))
+# node.colors <- (x$alpha+sf) / (2*sf) * 100
+# pal <- brewer_pal(length(unique(V(g)$type)), "Dark2")
+# g$palette <- categorical_pal(2)
+# pdf('./plots/cooccurrence/cooccurence_igraph.pdf')
+p1<-plot.igraph(g,edge.width=E(g)$weight/2, vertex.label=V(g)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .05')
+# dev.off()
+```
+
+```{r}
+g1<-delete.edges(g, which(abs(E(g)$weight) <5))
+g1<-delete.vertices(g1, which(degree(g1)==0))
+p2<-plot.igraph(g1,vertex.label=V(g1)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: 5\n pval: .05')
+```
+
+
+```{r}
+g2<-delete.edges(g, which(abs(E(g)$alpha) <5))
+g2<-delete.edges(g2, which(E(g2)$pval>.025))
+g2<-delete.vertices(g2, which(degree(g2)==0))
+p3<-plot.igraph(g2,vertex.label=V(g2)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .025')
+```
+```{r}
+g3<-delete.edges(g, which(abs(E(g)$alpha) <5))
+g3<-delete.edges(g3, which(E(g3)$pval>.01))
+g3<-delete.vertices(g3, which(degree(g3)==0))
+pdf('./plots/cooccurrence/cooccurrence_igraph_a5_p.01.pdf')
+p4<-plot.igraph(g3,vertex.label=V(g3)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .01')
+dev.off()
+```
+```{r}
+# layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
+pdf('./plots/cooccurrence/igraph_cutoffs.pdf')
+par(mfrow=c(2,2),mar=c(.1,.1,2,.1))
+plot.igraph(g,edge.width=E(g)$weight/2, vertex.label=V(g)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .05')
+plot.igraph(g1,vertex.label=V(g1)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: 5\n pval: .05')
+plot.igraph(g2,vertex.label=V(g2)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .025')
+plot.igraph(g3,vertex.label=V(g3)$name,vertex.label.cex = .4,layout=layout_nicely)
+title('Alpha: All\n pval: .01')
+dev.off()
+```
+
+```{r}
+sub_edges<-edges%>%
+  filter(abs(alpha)>=5)
+sub_nodes<-nodes%>%
+  filter((tax %in% sub_edges$tax1) |(tax %in% sub_edges$tax2))
+sub_g<-igraph::graph_from_data_frame(d=sub_edges,vertices = sub_nodes,directed=FALSE)
+V(sub_g)$size=V(sub_g)$prevalence*20+5
+E(sub_g)$weight<-E(sub_g)$alpha
+pdf('./')
+plot.igraph(sub_g,vertex.label=V(sub_g)$name,vertex.label.cex = .4,layout=layout_nicely)
+```
+```{r}
+E(sub_g)$weight
+```
+
+
+
+How does library size affect detection?
+```{r}
+plot_rpm<-function(n){
+  df<-kraken%>%
+  filter(type=='exp')%>%
+  filter(name==n)
+  p1<-df%>%
+  ggplot(.,aes(x=total, y=rpm))+
+  geom_point()+
+  geom_hline(yintercept = max(df$control_rpm),color='red')
+  p2<-df%>%
+  ggplot(.,aes(x=total, y=unique_minimizers))+
+  geom_point()+
+  geom_hline(yintercept = 100,color='red')
+  grid.arrange(grobs=list(p1,p2), nrow=1,top=n)
+  # return(list(p1,p2))
+}
+
+```
+```{r}
+taxList<-prev%>%
+  mutate(p=(rowSums(prev)))%>%
+  select(p)%>%
+  rownames_to_column(var='tax')%>%
+  arrange(desc(p))%>%
+  pull(tax)
+```
+
+
+```{r}
+high<-c('Clostridium', 'Spiroplasma', 'Mycoplasma', 'Candidatus Midichloria', 'Campylobacter', 'Blattabacterium', 'Buchnera', 'Helicobacter')
+p<-lapply(high,plot_rpm)
+pdf(file='./cooccurence/high_prev_cutoff.pdf', width = 12, height=30)
+grid.arrange(grobs=p, nrow=length(high))
+dev.off
+```
+
+```{r}
+low<-c('Frondihabitans', 'Lactococcus', 'Frigoribacterium', 'Aeromicrobium', 'Mycobacteroides', 'Kinneococcus', 'Kinneretia', 'Mitsuaria', 'Pseudonocardia', 'Alicycliphilus', 'Paucibacter', 'Aquabacterium', 'Ramlibacter', 'Kytococcus', 'Salmonella')
+p_low<-lapply(low,plot_rpm)
+pdf(file='./cooccurence/low_prev_cutoff.pdf', width = 12, height=55)
+grid.arrange(grobs=p_low, nrow=length(low))
+dev.off
+```
+
+How many genera detected per library size?
+```{r}
+kraken%>%
+  group_by(sample)%>%
+  summarise(n_genera=n(), libsize=first(total))%>%
+  ggplot(.,aes(x=libsize, y=n_genera))+
+  geom_point()+
+  ggtitle('Diversity by Library Size')
+
+
+kraken%>%
+  filter(rpm>=100*control_rpm)%>%
+  filter(unique_minimizers>=100)%>%
+  group_by(sample)%>%
+  summarise(n_genera=n(), libsize=first(total))%>%
+  ggplot(.,aes(x=libsize, y=n_genera))+
+  geom_point()+
+  ggtitle('Filtered Diversity by Library Size')
+```
+
+
+```{r}
+glibsize<-kraken%>%
+  filter(dataset=='Garrapatta')%>%
+  pull(total)%>%
+  unique()
+median(glibsize)
+```
+Now want to use alpha metric for viral segments
+```{r}
+cov_long<-read_csv('./intermediate/read_cov_long_trunc.csv')
+rdrp_md<-read_csv('./intermediate/rdrp_md.csv')
+```
+```{r}
+ctg_p<-cov_long%>%
+  filter(tpm>=10*control_tpm)%>%
+  pivot_wider(id_cols=contig_id, names_from=sample_id, values_from=tpm)%>%
+  column_to_rownames(var='contig_id')%>%
+  fill
+ctg_p[ctg_p>0]=1
+ctg_p[is.na(ctg_p)]=0
+```
+
+```{r}
+ctg_out <- affinity(data = ctg_p, row.or.col = "row")
+# plotgg(data = myout, variable = "alpha_mle", legendlimit = "datarange")
+
+ctg_alpha<-ctg_out$alpha_mle%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='alpha', -tax1)%>%
+  drop_na(alpha)
+ctg_pval<-ctg_out$p_value%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='pval', -tax1)%>%
+  drop_na(pval)%>%
+  mutate(pval=as.numeric(pval))
+ctg_nobs<-myout$cooccur.obs%>%
+  rownames_to_column(var='tax1')%>%
+  gather('tax2', value='n_occur', -tax1)%>%
+  drop_na(n_occur)
+ctg_cca<-ctg_alpha%>%
+  left_join(ctg_pval, by=c('tax1', 'tax2'))%>%
+  left_join(ctg_nobs, by=c('tax1', 'tax2'))
+write_csv(ctg_cca, './contig_alpha.csv')
+```
+

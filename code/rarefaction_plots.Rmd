@@ -1,0 +1,265 @@
+---
+title: "rarefaction_plots"
+output: html_document
+---
+
+```{r}
+library('tidyverse')
+library('readr')
+library('ggplot2')
+library('fossil')
+library('gridExtra')
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir =  '~/chou_lab/alongshan/')
+```
+for ticks
+```{r}
+df<-read_csv('./out/rarefaction/sampling_samples.csv')
+
+df_long<-df%>%
+  select(-std)%>%
+  gather(key='iteration', value='no_genomes', -no_samples)%>%
+  mutate(gtype=ifelse(str_detect(iteration, 'iter'), 'iteration', 'summary'))
+df_long%>%
+  ggplot(.,aes(x=no_samples, y=no_genomes, group=iteration,
+               color=gtype, alpha=gtype))+
+  geom_step()+
+  scale_alpha_discrete(range = c(0.35, 1))+
+  scale_color_manual(labels=c('single iteration', 'median'), values=c('skyblue2','dodgerblue4'))+
+  scale_y_continuous(breaks=seq(0,14,2))+
+  scale_x_continuous(breaks=seq(0,80, 10))+
+  labs(title='Species Richness by Number of Samples', x='Samples', y='Unique Viral Genomes', color='')+
+  guides(alpha = FALSE) +
+  geom_text(data=list('Chao'=14.1))
+
+# ggsave('./out/plots/rarefaction.pdf')
+```
+```{r}
+df2<-read_csv('~/chou_lab/alongshan/out/rarefaction/presence_for_chao.csv')
+df2_wide<-df2%>%
+  spread(sample, present)%>%
+  column_to_rownames(var='cluster')
+
+chao2(df2_wide,taxa.row = TRUE)
+```
+for mosquito data
+```{r setup}
+knitr::opts_knit$set(root.dir = '~/chou_lab/best_practices/')
+```
+```{r}
+basename('./sampling_genera/sampling_Aedes.csv')
+```
+
+
+
+combining all species/locations
+```{r}
+df<-read_csv('~/chou_lab/best_practices/sampling_samples.csv')
+
+df_long<-df%>%
+  select(-std)%>%
+  gather(key='iteration', value='no_genomes', -no_samples)%>%
+  mutate(gtype=ifelse(str_detect(iteration, 'iter'), 'iteration', 'summary'))
+df_long%>%
+  ggplot(.,aes(x=no_samples, y=no_genomes, group=iteration,
+               color=gtype, alpha=gtype))+
+  geom_step()+
+  scale_alpha_discrete(range = c(0.35, 1))+
+  scale_color_manual(labels=c('single iteration', 'median'), values=c('skyblue2','dodgerblue4'))+
+  scale_y_continuous(breaks=seq(0,70,2))+
+  scale_x_continuous(breaks=seq(0,135, 10))+
+  labs(title='Species Richness by Number of Samples', x='Samples', y='Unique Viral Genomes', color='')+
+  guides(alpha = FALSE) 
+
+ggsave('./combined_rarefaction.pdf')
+```
+
+
+```{r}
+read_rtable<- function(path){
+  tax=str_extract_all(basename(path),"(?<=sampling_).+(?=.csv)")
+  %>%str_to_title()
+  df<-read_csv(path)%>%
+  select(-std)%>%
+  gather(key='iteration', value='no_genomes', -no_samples)%>%
+  mutate(gtype=ifelse(str_detect(iteration, 'iter'), 'iteration', 'summary'))%>%
+  mutate(tax=tax)
+  return(df)
+}
+```
+```{r}
+files<-list.files(path='./sampling_species', pattern='s*.csv', full.names = TRUE)
+r_species<-bind_rows(lapply(files, read_rtable))
+```
+
+
+```{r}
+files<-list.files(path='./sampling_genera', pattern='*.csv', full.names = TRUE)
+r_genera<-bind_rows(lapply(files, read_rtable))
+```
+```{r}
+r_genera%>%
+  ggplot(.,aes(x=no_samples, y=no_genomes, group=iteration,
+               color=tax, alpha=gtype))+
+  geom_step()+
+  scale_alpha_discrete(range = c(0.05, 1))+
+  labs(title='Species Richness by Number of Samples', x='Samples', y='Unique Viral Genomes', color='')+
+  guides(alpha = FALSE) 
+
+r_species%>%
+  ggplot(.,aes(x=no_samples, y=no_genomes, group=iteration,
+               color=tax, alpha=gtype))+
+  geom_step()+
+  scale_alpha_discrete(range = c(0.05, 1))+
+  labs(title='Species Richness by Number of Samples', x='Samples', y='Unique Viral Genomes', color='')+
+  guides(alpha = FALSE) 
+```
+```{r}
+plot_rare<-function(df,t){
+  df%>%
+  filter(tax==t)%>%
+  ggplot(.,aes(x=no_samples, y=no_genomes, group=iteration,
+               alpha=gtype, color=gtype))+
+  geom_step()+
+  scale_alpha_discrete(range = c(0.35, 1))+
+  scale_color_manual(labels=c('single iteration', 'median'), values=c('skyblue2','dodgerblue4'))+
+  labs(title=t, x='Samples', y='Unique Viral Genomes', color='')+
+  guides(alpha = FALSE,color=FALSE) 
+}
+```
+
+
+```{r}
+genera<-r_genera%>%pull(tax)%>%unique()
+p1<-lapply(genera,plot_rare, df=r_genera)
+pdf(file='./genera_rarefaction.pdf', width = 12, height=5)
+grid.arrange(grobs=p1, nrow=1)
+dev.off
+
+species<-r_species%>%pull(tax)%>%unique()
+p2<-lapply(species,plot_rare, df=r_species)
+pdf(file='./species_rarefaction.pdf', width = 12, height=20)
+grid.arrange(grobs=p2, nrow=4)
+dev.off
+```
+
+Chao Index
+
+
+
+```{r}
+df3<-read_csv('./sampling_reads.csv')
+
+
+df3%>%
+  ggplot(.,aes(x=no_reads,y=no_genomes,group=sample, color=sample))+
+  geom_line(alpha=.5)+
+  scale_y_continuous(breaks=seq(0,10,by=1))+
+  scale_x_continuous(breaks=seq(0,1.3e7,by=1e6), labels=seq(0,13, by=1))+
+  labs(title='Species Richness by Number of Reads', x='Millions of Host Subtracted Reads', y='Unique Viral Genomes')
+```
+```{r}
+a<-'TICK001_018_1000000_cdhit.csv'
+# gsub(".*TICK001_018_ (.+) _cdhit.csv.*", "\\1", a)
+str_match(a, "TICK001_018_\\s*(.*?)\\s*_cdhit.csv")[,2]
+```
+
+```{r}
+read_cdhit<-function(path){
+  read_csv(path)%>%
+    mutate(nreads=str_match(path, "TICK001_018_\\s*(.*?)\\s*_cdhit.csv")[,2])
+}
+```
+```{r}
+read_cdhit('./fragmentation/t18/TICK001_018_100000_cdhit.csv')
+```
+
+```{r}
+files<-list.files(path='./fragmentation/t18/', pattern='*.csv', full.names = TRUE)
+clist<-lapply(files, read_cdhit)
+
+t18<-bind_rows((clist))%>%
+  mutate(nreads=factor(nreads, levels=c('50000', '100000', '500000', '1000000', '2000000', '3000000', '4000000', 'all', 'idseq')))%>%
+  mutate(virus=ifelse(rep==TRUE, contig_id, NA))%>%
+  fill(virus)
+```
+
+
+```{r}
+t18%>%
+  filter(rep==FALSE)%>%
+  arrange(-length)%>%
+  group_by(nreads,cluster)%>%
+  filter(row_number()==1)
+  
+```
+
+```{r}
+t18%>%
+  filter(rep==FALSE)%>%
+  arrange(-length)%>%
+  group_by(nreads,virus)%>%
+  filter(row_number()==1)%>%
+  select(-rep,-per_identity, -contig_id, -cluster)%>%
+  spread(virus,length,fill=0)%>%
+  gather(key='virus', value='length',-nreads)%>%
+  ggplot(.,aes(x=virus, y=length, fill=nreads,group=nreads))+
+  geom_bar(stat='identity', position='dodge')+
+  scale_fill_brewer()+
+  # geom_hline(yintercept = 1000, color='red')+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+  labs(title='Genome Fragmentation', x='virus name', y='longest contig',fill='number reads')
+
+# ggsave('./t18_frag.pdf')
+
+t18%>%
+  filter(rep==FALSE)%>%
+  filter(virus=='Painters')%>%
+  group_by(nreads)%>%
+  ggplot(., aes(x=virus, y=length,color=nreads,alpha=per_identity))+
+  geom_bar(stat='identity', position='dodge')+
+  scale_color_brewer()+
+  scale_alpha_binned(breaks=c(85, 90, 95, 100), limits=c(85, 100),na.value=0)+
+  labs(title='Painters Point Virus', x='', y='Contig Length')
+
+```
+```{r}
+files<-list.files(path='./fragmentation/assemblers/', pattern='*.csv', full.names = TRUE)
+clist<-lapply(files, read_cdhit)
+
+assemblers<-bind_rows((clist))%>%
+  rename(assembler=nreads)%>%
+  mutate(virus=ifelse(rep==TRUE, contig_id, NA))%>%
+  fill(virus)%>%
+  filter(rep==FALSE)%>%
+  select(-rep, -cluster)
+
+null_rows<-assemblers%>%
+  select(-contig_id, -per_identity)%>%
+  group_by(assembler, virus)%>%
+  filter(row_number()==1)%>%
+  spread(virus,length,fill=0)%>%
+  gather(key='virus', value='length', -assembler)%>%
+  filter(length==0)%>%
+  mutate(per_identity=0)%>%
+  mutate(contig_id=NA)
+assemblers<-assemblers%>% rbind(null_rows[colnames(assemblers)])
+```
+
+```{r}
+assemblers%>%
+  group_by(assembler)%>%
+  ggplot(., aes(x=virus, y=length,fill=assembler,alpha=per_identity))+
+  geom_bar(stat='identity', position='dodge', color='grey')+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+  scale_alpha_binned(breaks=c(85, 90, 95, 100), limits=c(85, 100),na.value=0)
+assemblers%>%
+  filter(virus=='Painters_Point_Virus')%>%
+  group_by(assembler)%>%
+  ggplot(., aes(x=virus, y=length,fill=assembler,alpha=per_identity))+
+  geom_bar(stat='identity', position='dodge', color='grey')+
+  theme(axis.text.x = element_text(angle = 45, hjust=1))+
+  scale_alpha_binned(breaks=c(85, 90, 95, 100), limits=c(85, 100),na.value=0)
+```

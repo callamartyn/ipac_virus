@@ -1,0 +1,587 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library('tidyverse')
+library('ggplot2')
+library('treemapify')
+
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '~/chou_lab/alongshan/')
+```
+
+Making a plot of overall dataset statistics
+
+```{r message=FALSE}
+post<-read_delim('sample_overviews.csv',delim=',')%>%
+  filter(sample_type=='whole body')%>%
+  select(c(1,6:8, 13:16, 28))%>%
+  drop_na(sample_name)%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+_L002',''))%>%
+  mutate(host_reads_percent = 100-nonhost_reads_percent)%>%
+  mutate(dash='post')
+
+pre<-read_delim('preDASH_sample_overviews.csv',delim=',')%>%
+  filter(sample_type=='whole body')%>%
+  select(c(1,6:8, 13:16, 28))%>%
+  drop_na(sample_name)%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+',''))%>%
+  mutate(host_reads_percent = 100-nonhost_reads_percent)%>%
+  mutate(dash='pre')
+
+datsum<-rbind(pre,post)
+rm(post,pre)
+```
+`
+
+
+```{r}
+datsum%>%
+  filter(dash=='post')%>%
+  ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads/1e06))+
+  geom_bar(stat='identity')+
+  geom_hline(yintercept = 10, color='red')+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Garrapatta Tick Library Size')+
+  xlab('Sample')+
+  ylab('# Reads (Millions)')
+#ggsave('out/plots/dataset_libsize.png')
+```
+
+```{r}
+read_breakdown <- datsum%>%
+  filter(sample_type=='whole body')%>%
+  mutate(host=(quality_control-nonhost_reads_percent))%>%
+  mutate(failed_qc=(100-quality_control))%>%
+  select(sample_name, host, failed_qc, nonhost_reads_percent)%>%
+  gather('read_type', 'percent',-sample_name)
+```
+```{r}
+read_breakdown %>%
+  ggplot(aes(.,x=sample_name, y=percent))+
+  geom_col(aes(fill=read_type,width=.8))+
+  scale_fill_manual(values=c('lightpink4','slategray3','olivedrab4'))+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Garrapatta Tick Read Breakdown')+
+  xlab('Sample')+
+  ylab('Percent')
+ggsave('out/plots/dataset_read_breakdown.png')
+```
+
+```{r}
+read_tx <- function(filename){
+  df<-read_delim(filename, delim=',')%>%
+    mutate(sample_name=substr(filename,29,39))
+  return(df)
+}
+```
+
+```{r}
+p_datsum%>%
+  filter(sample_type=='whole body')%>%
+  ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads/1e03))+
+  geom_bar(stat='identity')+
+  #geom_hline(yintercept = 10, color='red')+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Pre-DASH Garrapatta Tick Library Size')+
+  xlab('Sample')+
+  ylab('# Reads (Thousands)')
+#ggsave('out/plots/preDASH_dataset_libsize.png')
+```
+
+```{r}
+x <- p_datsum %>%
+  mutate(pre_total_reads = total_reads) %>%
+  mutate(pre_host_percent = host_reads_percent) %>%
+  select(sample_name, pre_total_reads, pre_host_percent)
+
+y <-datsum %>%
+  mutate(host_percent = 100-nonhost_reads_percent)%>%
+  select(sample_name, total_reads, host_percent)%>%
+  left_join(., x, by='sample_name')
+y%>%
+  ggplot(.,aes(x=pre_total_reads, y=total_reads))+
+  geom_point()
+
+y%>%
+  filter(sample_name!='TICK001_024')%>%
+  ggplot(.,aes(x=pre_host_percent, y = total_reads))+
+  geom_point()
+```
+
+```{r}
+get_insert <- function(file){
+  x <- read_delim(file, delim='\t', col_names = c('insert_size','frequency'))
+  v <- rep(x$insert_size, x$frequency)
+  return(median(v))
+}
+```
+
+
+
+```{r message = FALSE}
+files <- Sys.glob('qc/insert/*.tsv')
+
+i <- tibble(sample_name=str_replace(files, 'qc/insert/','')%>% str_replace(., '_insert.tsv', ''), med_insert = unlist(lapply(files, get_insert)))
+
+y <- left_join(y, i, by='sample_name')
+y %>%
+  ggplot(.,aes(x=med_insert, y=total_reads))+
+  geom_point()
+```
+
+```{r}
+y <- y %>%
+  mutate(post_lib_rank=dense_rank(-y$total_reads))%>%
+  mutate(pre_lib_rank=dense_rank(-y$pre_total_reads))
+```
+
+```{r}
+y%>%
+  ggplot(.,aes(x=pre_lib_rank, y=post_lib_rank))+
+  geom_point()
+```
+
+
+
+```{r}
+dash_sum <- read_delim('qc/dash/garrapatta_dash.txt', delim = ' ', col_names = FALSE)%>%
+  slice(seq(1, 336, 2))%>%
+  select(c(6,10))%>%
+  set_names(c('sample_name', 'per_dashable'))%>%
+  mutate('DASH'=ifelse(str_detect(sample_name, 'L002'), 'post_dash', 'pre_dash'))%>%
+  mutate('sample_name'=substr(sample_name, 1, 11))%>%
+  mutate('per_dashable'=str_replace(per_dashable, '%', ''))%>%
+  mutate('per_dashable'=as.numeric(per_dashable))%>%
+  spread(., 'DASH', 'per_dashable')
+#y<- dash_sum%>%
+#  left_join(y,., by='sample_name')
+```
+```{r}
+y %>%
+  drop_na(post_dash)%>%
+  ggplot(.,aes(x=post_dash, y=total_reads))+
+  geom_jitter(height=NULL, width=.3)+
+  xlab('Post-DASH % Dashable Reads')+
+  ylab('Lib Size (Millions)')
+
+y %>%
+  drop_na(pre_dash)%>%
+  ggplot(.,aes(x=pre_dash, y=total_reads))+
+  geom_point()+
+  xlab('Raw % Dashable Reads')+
+  ylab('Lib Size (Millions)')
+
+y %>%
+  drop_na(post_dash, pre_dash)%>%
+  ggplot(.,aes(x=pre_dash, y=post_dash))+
+  geom_point()+
+  xlab('Pre-DASH % Dashable Reads')+
+  ylab('Post-DASH % Dashable Reads')
+```
+
+```{r}
+y %>%
+  ggplot(.,aes(x=post_dash, y=host_percent))+
+  geom_point()+
+  xlab('Post-DASH % DASHable Reads')+
+  ylab('% Host Sequence')
+
+y %>%
+  ggplot(.,aes(x=pre_dash, y=host_percent))+
+  geom_point()+
+  xlab('Raw % DASHable Reads')+
+  ylab('% Host Sequence')
+
+y %>%
+  ggplot(.,aes(x=pre_host_percent, y=host_percent))+
+  geom_point()+
+  xlab('Raw % DASHable Reads')+
+  ylab('Post-DASH % DASHable Reads')
+```
+```{r}
+libs<-c('TICK001_007', 'TICK001_011', 'TICK001_020', 'TICK001_021', 'TICK001_023', 'TICK001_038', 'TICK001_064', 'TICK001_077', 'TICK001_078', 'TICK001_091','TICK001_001','TICK001_013', 'TICK001_051', 'TICK001_087', 'TICK001_089' )
+datsum <- datsum%>%
+  mutate('library_status'=ifelse((sample_name %in% libs), 'undiluted', 'diluted'))
+  
+datsum %>%
+  filter(dash=='post')%>%
+  ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads/1e06, color=library_status))+
+  geom_bar(stat='identity')+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Post-DASH Garrapatta Tick Library Size')+
+  xlab('Sample')+
+  ylab('# Reads (Millions)')
+
+#ggsave('./out/plots/post_dash_lib_size.png')
+
+datsum %>%
+  filter(dash=='pre')%>%
+  ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads/1e03, color=library_status))+
+  geom_bar(stat='identity')+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Pre-DASH Garrapatta Tick Library Size')+
+  xlab('Sample')+
+  ylab('# Reads (Thousands)')
+
+#ggsave('./out/plots/pre_dash_lib_size.png')
+```
+```{r}
+y%>%
+  mutate('library_status'=ifelse((sample_name %in% libs), 'undiluted', 'diluted'))%>%
+  arrange(-total_reads)
+```
+
+```{r}
+?gather
+```
+
+
+```{r}
+reseq<-y %>%
+  filter(total_reads<=40000000)%>%
+  filter(!str_detect(sample_name, 'water'))%>%
+  select(sample_name, total_reads)%>%
+  arrange(total_reads)
+
+write_csv(reseq, './qc/samples_to_resequence.csv')
+```
+
+
+```{r message = FALSE}
+files <-Sys.glob("out/taxon_reports/pacificus/*.csv")
+tx_reports <- lapply(files, read_tx)
+txsum <- do.call(rbind,tx_reports)
+#rm(tx_reports)
+```
+```{r}
+txsum<-txsum%>%
+  mutate(category=replace_na(category,'unknown'))
+```
+
+```{r}
+txsum%>%
+  filter(category=='eukaryota')%>%
+  filter(tax_level==2)%>%
+  select(name)%>%
+  unique()
+```
+
+```{r}
+txsum%>%
+  filter(is.na(category))
+```
+```{r}
+tx_breakdown <- txsum%>%
+  filter(tax_level==2)%>%
+  filter(category!='eukaryota')%>%
+  mutate(nt_count=replace_na(nt_count,0))%>%
+  mutate(nr_count=replace_na(nr_count,0))%>%
+  mutate(nt_nr_count = (nt_count+ nr_count))%>%
+  group_by(sample_name,category)%>%
+  summarise(reads=sum(nt_nr_count))
+```
+
+```{r}
+tx_breakdown<-datsum%>%
+  select(sample_name,total_reads,nonhost_reads)%>%
+  right_join(.,tx_breakdown, by='sample_name')%>%
+  group_by(sample_name)%>%
+  mutate(per=round(reads/sum(reads),3))
+```
+
+
+
+```{r}
+tx_breakdown%>%
+  #filter(total_reads<2.27e7)%>%
+  #filter(category!='eukaryota')%>%
+  ggplot(.,aes(x=reorder(sample_name, -nonhost_reads), y=per))+
+  geom_col(aes(fill=category,width=.8),stat='identity')+
+  theme(axis.text.x = element_blank(),plot.title = element_text(hjust = 0.5))+
+  ggtitle('Garrapatta Tick Taxa Breakdown')+
+  xlab('Sample')+
+  ylab('Percent')
+ggsave('out/plots/read_taxa_breakdown.png')
+```
+
+```{r}
+datsum <- datsum%>%
+  mutate(per_dup=1-(reads_after_cdhitdup/reads_after_priceseq))
+```
+```{r}
+datsum%>%
+  filter(dash=='post')%>%
+  ggplot(.,aes(x=per_dup, y=total_reads/1e06, color=library_status))+
+  geom_point()+
+  xlab('Percent Duplicate Reads')+
+  ylab('Library Size (Million Reads)')
+ggsave('out/plots/duplication.png')
+```
+
+```{r}
+datsum%>%
+  filter(dash=='pre')%>%
+  ggplot(.,aes(x=per_dup, y=total_reads/1e06))+
+  geom_point()+
+  xlab('Percent Duplicate Reads')+
+  ylab('Library Size (Million Reads)')
+```
+
+
+```{r}
+datsum%>%
+  filter(dash=='pre')%>%
+  pull(nonhost_reads_percent)%>%
+  median(.)
+```
+
+```{r}
+pre_median=datsum%>%
+  filter(dash=='pre')%>%
+  pull(nonhost_reads_percent)%>%
+  median(.)
+post_median=datsum%>%
+  filter(dash=='post')%>%
+  pull(nonhost_reads_percent)%>%
+  median(.)
+datsum%>%
+  filter(dataset=='Garrapatta')%>%
+  ggplot(aes(x=nonhost_reads_percent, fill=dash))+
+  geom_histogram(binwidth=0.1,alpha=0.6, position = 'identity')+
+  scale_fill_manual(values=c("#69b3a2", "#404080"))+
+  geom_vline(xintercept = pre_median, color="#404080")+
+  geom_vline(xintercept = post_median, color="#69b3a2")+
+  annotate("text",x=pre_median, label=pre_median, y=40, colour="#404080", angle=90, vjust = 1.5, text=element_text(size=15))+
+  annotate("text",x=post_median, label=post_median, y=40, colour="#69b3a2", angle=90, vjust = 1.5, text=element_text(size=15))
+
+ggsave('~/chou_lab/alongshan/out/seq_depth/dash_percent_host_improvement.pdf')
+```
+```{r}
+1e6/(pre_median/100)
+1e6/(post_median/100)
+```
+```{r}
+datsum %>%
+  filter(dash=='post')%>%
+  select(sample_name, nonhost_reads)%>%
+  arrange(nonhost_reads)
+```
+```{r}
+datsum %>%
+  filter(dash=='post')%>%
+  select(sample_name, nonhost_reads, total_reads)%>%
+  filter(total_reads<10000000)%>%
+  arrange(nonhost_reads)
+```
+```{r}
+colnames(datsum)
+```
+
+```{r}
+cc <- read_delim('~/chou_lab/alongshan/china_camp_samples_overview.csv', delim=',')%>%
+  filter(sample_type=='Whole Body')%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+',''))%>%
+  mutate(host_reads_percent = 100-nonhost_reads_percent)%>%
+  mutate(dash='pre')%>%
+  select(colnames(datsum))%>%
+  drop_na(sample_name) %>%
+  mutate(dataset='China Camp')
+  
+```
+
+```{r}
+datsum <- datsum %>%
+  mutate(dataset='Garrapatta')%>%
+  rbind(.,cc)
+```
+
+```{r}
+datsum <- datsum %>%
+  mutate(group=paste(dataset, dash))
+```
+
+
+```{r}
+pre_g=datsum%>%
+  filter(group=='Garrapatta pre')
+  pull(nonhost_reads_percent)%>%
+  median(.)
+post_g=datsum%>%
+  filter(group=='Garrapatta post')%>%
+  pull(nonhost_reads_percent)%>%
+  median(.)
+pre_c=datsum%>%
+  filter(group=='China Camp pre')%>%
+  pull(nonhost_reads_percent)%>%
+  median(.)
+
+datsum%>%
+  ggplot(aes(x=nonhost_reads_percent, fill=group))+
+  geom_histogram(binwidth=0.1,alpha=0.6, position = 'identity')+
+  #scale_fill_manual(values=c("#69b3a2", "#404080"))+
+  geom_vline(xintercept = pre_median, color="#404080")+
+  geom_vline(xintercept = post_median, color="#69b3a2")+
+  annotate("text",x=pre_median, label=pre_median, y=40, colour="#404080", angle=90, vjust = 1.5, text=element_text(size=15))+
+  annotate("text",x=post_median, label=post_median, y=40, colour="#69b3a2", angle=90, vjust = 1.5, text=element_text(size=15))
+
+```
+
+```{r}
+datsum%>%
+  filter(group=='China Camp pre')%>%
+  ggplot(aes(x=nonhost_reads_percent))+
+  geom_histogram(binwidth=0.1,alpha=0.6, position = 'identity')+
+  xlim(0,12)
+  #scale_fill_manual(values=c("#69b3a2", "#404080"))+
+  #geom_vline(xintercept = pre_median, color="#404080")+
+  #geom_vline(xintercept = post_median, color="#69b3a2")+
+  #annotate("text",x=pre_median, label=pre_median, y=40, colour="#404080", angle=90, vjust = 1.5, text=element_text(size=15))+
+  #annotate("text",x=post_median, label=post_median, y=40, colour="#69b3a2", angle=90, vjust = 1.5, text=element_text(size=15))
+```
+```{r}
+redo<-datsum%>%
+  filter(dash=='post')%>%
+  select(sample_name,total_reads)%>%
+  filter(total_reads<1e7)%>%
+  pull(sample_name)
+```
+
+
+```{r}
+ggpool <- datsum%>%
+  filter(sample_name %in% redo)%>%
+  filter(dash=='pre')
+gg_med<-median(ggpool$total_reads)
+# ggpool%>%
+#   ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads))+
+#   geom_bar(stat='identity')+
+#   geom_hline(yintercept = gg_med, color='red')+
+#   geom_hline(yintercept = 3e05, color='blue')+
+#   ggtitle('Garrapatta reads/uL')+
+#   theme(axis.text.x=element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5))
+# ggsave('./qc/garrapatta_concentrations.png')
+```
+```{r}
+ggpool <- ggpool %>%
+  mutate('pool'=ifelse(total_reads <= 2e5, 1, 2))%>%
+  select(sample_name, pool, total_reads)
+```
+
+
+```{r}
+cc<-cc %>%
+  filter(total_reads>2000)
+cc_med<-median(cc$total_reads)
+# cc%>%
+#   ggplot(.,aes(x=reorder(sample_name, -total_reads),y=total_reads))+
+#   geom_bar(stat='identity')+
+#   geom_hline(yintercept = cc_med,color='red')+
+#   ggtitle('China Camp reads/uL')+
+#   theme(axis.text.x=element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5))
+# ggsave('./qc/china_camp_concentrations.png')
+
+#use 60k reads/uL as cutoff
+```
+
+```{r}
+pool <- cc %>%
+  mutate(pool=ifelse(total_reads<=cc_med, 3, 4))%>%
+  select(sample_name, pool, total_reads)%>%
+  rbind(.,ggpool)
+#write_csv(pool,'qc/re_dashing_pools.csv')
+```
+```{r}
+pool %>%
+  left_join(.,dash_sum, by='sample_name')%>%
+  filter(!str_detect(sample_name, 'TICK001'))
+```
+
+```{r}
+volume_pool<-pool %>%
+  filter(sample_name!='TICK001_017')%>%
+  group_by(pool)%>%
+  mutate(med_conc = median(total_reads))%>%
+  mutate(max_conc=max(total_reads))%>%
+  mutate(vol=(med_conc/total_reads))%>%
+  #mutate(vol=ifelse(sum(vol)<25,vol*2, vol))%>%
+  mutate(pool_volume=sum(vol))%>%
+  mutate(scale=ifelse(pool==1|pool==2, 50/pool_volume, 30/pool_volume))%>%
+  mutate(adj_vol=vol*scale)%>%
+  mutate(adj_pool_volume=pool_volume*scale)%>%
+  mutate(exp_reads_uL=total_reads*adj_vol)
+```
+
+
+
+```{r}
+comb_con <- read_csv('~/chou_lab/alongshan/qc/china_camp_concentrations.csv')
+# it looks like the lowest concentration tick001 samples is almost ten times the highest tick002 sample so I'm not going to transfer one for batch effect purposes
+```
+
+
+```{r}
+volume_pool <- volume_pool %>%
+  ungroup()%>%
+  mutate(adj_vol=round(adj_vol,digits=2)) %>%
+  arrange(pool, adj_vol)
+```
+```{r}
+write_csv(volume_pool, '~/chou_lab/alongshan/qc/re_seq_pooling_volumes.csv')
+```
+```{r}
+datsum %>%
+  filter(dash=='post')%>%
+  select(sample_name, nonhost_reads)%>%
+  write_csv(.,'~/chou_lab/alongshan/qc/tick001_total_reads.csv')
+```
+
+```{r}
+dash_sum %>%
+  left_join(.,pool, by='sample_name')%>%
+  drop_na(pool)%>%
+  mutate(pool=as_factor(pool))%>%
+  # group_by(pool)%>%
+  ggplot(.,aes(x=pre_dash,fill=pool))+
+    geom_histogram(alpha=0.7,position='dodge')
+```
+Looking at final libraries
+```{r}
+g1<-read_csv('./run1_sample_overviews.csv')%>%
+  select(sample_name, total_reads, nonhost_reads, total_ercc_reads)%>%
+  dplyr::rename(sample_id=sample_name)
+g2<-read_csv('./run2_sample_overviews.csv')%>%
+  select(sample_name, total_reads, nonhost_reads, total_ercc_reads)%>%
+  dplyr::rename(sample_id=sample_name)
+g3<-read_csv('./cc_sample_overviews.csv')%>%
+  select(sample_name, total_reads, nonhost_reads, total_ercc_reads)%>%
+  dplyr::rename(sample_id=sample_name)
+g_all<-rbind(g1,g2,g3)%>%
+  filter(!str_detect(sample_id,'water' ))%>%
+  mutate(sample_id=str_sub(sample_id, 1,11))%>%
+  filter(sample_id!='TICK001_017')%>%
+  group_by(sample_id) %>%
+  arrange(desc(total_reads)) %>%
+  filter(row_number()==1)
+
+```
+```{r}
+median(g_all$total_reads)
+```
+```{r}
+x<-read_csv('./paper_repo/sample_sum.csv')
+x<-x%>%
+  left_join(g_all%>%select(sample_id,total_ercc_reads),by='sample_id')
+write_csv(x,'./paper_repo/sample_sum.csv' )
+```
+
+
+```{r}
+write_csv(g_all, './out/intermediate/idseq_sample_overview.csv')
+write_csv()
+```
+
