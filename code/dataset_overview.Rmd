@@ -1,0 +1,127 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library('tidyverse')
+library('ggplot2')
+library('treemapify')
+library('ggbreak')
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '~/chou_lab/alongshan/')
+```
+
+Making a plot of overall dataset statistics
+```{r}
+read_csv('preDASH_sample_overviews.csv')
+```
+```{r}
+pre<-read_csv('preDASH_sample_overviews.csv')%>%
+  select(sample_name, total_reads,nonhost_reads_percent)%>%
+  drop_na(sample_name)%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+',''))%>%
+  mutate(dash='before DASH')
+```
+```{r}
+
+post2<-read_csv('run2_sample_overviews.csv')%>%
+  select(sample_name, total_reads, nonhost_reads_percent)%>%
+  drop_na(sample_name)%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+_L003',''))%>%
+  mutate(dash='after DASH')
+post1<-read_csv('run1_sample_overviews.csv')%>%
+  select(sample_name, total_reads, nonhost_reads_percent)%>%
+  drop_na(sample_name)%>%
+  mutate(sample_name=str_replace(sample_name, '_S\\d+_L002',''))%>%
+  mutate(dash='after DASH')%>%
+  filter(!sample_name %in% post2$sample_name)
+post<-rbind(post1, post2)
+```
+
+```{r}
+
+dash<-pre%>%
+  rbind(post)%>%
+  group_by(sample_name)%>%
+  filter(n()==2)%>%
+  filter(!str_detect(sample_name, 'water'))
+```
+
+```{r}
+x=10^seq(-2, 1)
+y=seq(2,9)
+y*x
+mbreaks<-unlist(lapply(x, `*`,y))
+```
+
+```{r}
+dash %>%
+  mutate(dash=factor(dash, levels=c('before DASH', 'after DASH')))%>%
+  ggplot(aes(dash,nonhost_reads_percent, fill=dash)) +
+  geom_boxplot(outlier.size=.6,color='#373836')+
+  scale_fill_manual(values=c("#72e5ef", "#3e8e9d"))+
+  geom_point(size=.6)+ 
+  geom_line(aes(group=sample_name),size=.3,alpha=0.7,color='#373836') +
+  theme(legend.position = "none")+
+  scale_y_log10(breaks=c(.01, .1, 1, 10), minor_breaks=mbreaks)+
+  ylab('percent nohost reads')+
+  theme(aspect.ratio = 1,axis.title.x=element_blank(), text=element_text(size = 18))
+
+ggsave('./out/plots/Overview/dash_improvement_box.pdf')
+```
+
+```{r}
+k<-read_delim('./kraken_combined_table.csv', delim=',')%>%
+  mutate(dataset=case_when(str_detect(sample, 'TICK001') ~ 'Garrapatta', str_detect(sample,'TICK002') ~ 'China Camp'))%>%
+  mutate(type=case_when(str_detect(sample, 'water|Hela') ~ 'control', TRUE ~ 'exp'))%>%
+  group_by(sample)%>%
+  mutate(total=sum(no_direct_reads))%>%
+  mutate(scale=total/1e6)%>%
+  mutate(rpm=no_reads/scale)%>%
+  mutate(rpm_direct=no_direct_reads/scale)
+
+
+
+```
+```{r}
+control<-k%>%
+  filter(type=='control')%>%
+  group_by(name)%>%
+  summarise(control_rpm = max(rpm_direct))
+
+k<-k%>%
+  left_join(control, by='name')%>%
+  mutate(control_rpm=replace_na(control_rpm, 0))
+```
+
+```{r}
+x<- k%>%
+  filter(rank=='U')%>%
+  mutate(percent_classified=100-percent_reads)%>%
+  select(sample, percent_classified)
+k_sum<-k%>%
+  left_join(x, by='sample')%>%
+  filter(rank %in% c('U', 'D'))%>%
+  # filter(name %in% c('unclassified', 'root'))%>%
+  filter(type=='exp')
+
+k_sum%>%
+  group_by(sample)%>%
+  ggplot(., aes(x=reorder(sample,-percent_classified), y=percent_reads, fill=name))+
+  geom_bar(stat='identity')+
+  scale_fill_manual(values=c('lightsalmon', 'grey'))+
+  xlab('Sample')+
+  ylab('Percent Nonhost Reads')+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave('../plots/Overview/kraken_classified.pdf')
+```
+
